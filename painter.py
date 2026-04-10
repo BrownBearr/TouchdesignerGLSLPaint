@@ -304,6 +304,10 @@ def _render_stroke_solid(
     radius: int,
     color_bgr: tuple[int, int, int],
     opacity: float,
+    *,
+    rng: Optional[np.random.Generator] = None,
+    built_in_stroke_fuzz: float = 0.0,
+    built_in_stroke_fuzz_blur: float = 1.0,
 ) -> None:
     if len(pts) < 2:
         return
@@ -339,6 +343,15 @@ def _render_stroke_solid(
         mask, (int(pts[-1][0] - x0), int(pts[-1][1] - y0)), radius, 1.0, thickness=-1, lineType=cv2.LINE_AA
     )
 
+    if built_in_stroke_fuzz > 0.0 and rng is not None:
+        fuzz = _procedural_stroke_fuzz_mask(
+            mask.shape,
+            rng,
+            strength=built_in_stroke_fuzz,
+            blur_sigma=built_in_stroke_fuzz_blur,
+        )
+        mask = mask * fuzz
+
     a = (mask * float(opacity)).clip(0.0, 1.0)[:, :, None]
     if float(a.max()) <= 0.0:
         return
@@ -349,6 +362,31 @@ def _render_stroke_solid(
     stroke[:, :, 1] = float(color_bgr[1])
     stroke[:, :, 2] = float(color_bgr[2])
     canvas_bgr_f32[y0:y1, x0:x1] = patch * (1.0 - a) + stroke * a
+
+
+def _procedural_stroke_fuzz_mask(
+    shape: tuple[int, int],
+    rng: np.random.Generator,
+    strength: float,
+    blur_sigma: float,
+) -> np.ndarray:
+    """
+    Smooth random grain in [1-strength, 1] (mean ~1) to modulate stroke opacity
+    without any PNG — gives a soft bristle / paper-tooth feel when strength > 0.
+    """
+    strength = float(np.clip(strength, 0.0, 1.0))
+    if strength <= 0.0:
+        return np.ones(shape, dtype=np.float32)
+    ph, pw = int(shape[0]), int(shape[1])
+    grain = rng.random((ph, pw), dtype=np.float32)
+    if blur_sigma > 0.05:
+        k = int(max(3, min(31, round(float(blur_sigma) * 4) * 2 + 1)))
+        if k % 2 == 0:
+            k += 1
+        grain = cv2.GaussianBlur(grain, (k, k), sigmaX=float(blur_sigma), sigmaY=float(blur_sigma))
+    # Blend between uniform 1.0 and grain so mean stays near 1
+    mult = (1.0 - strength) + strength * grain
+    return mult.astype(np.float32)
 
 
 def paintify(
@@ -370,6 +408,8 @@ def paintify(
     underpaint: bool = True,
     underpaint_mode: str = "average",  # "average" or "blur"
     force_coverage: bool = True,
+    built_in_stroke_fuzz: float = 0.0,
+    built_in_stroke_fuzz_blur: float = 1.0,
 ) -> np.ndarray:
     """
     Stroke-based painterly rendering (Hertzmann 1998), OpenCV/NumPy implementation.
@@ -460,7 +500,16 @@ def paintify(
             if brush is not None:
                 _render_stroke_textured(canvas, pts, r, color, opacity, brush)
             else:
-                _render_stroke_solid(canvas, pts, r, color, opacity)
+                _render_stroke_solid(
+                    canvas,
+                    pts,
+                    r,
+                    color,
+                    opacity,
+                    rng=rng,
+                    built_in_stroke_fuzz=float(built_in_stroke_fuzz),
+                    built_in_stroke_fuzz_blur=float(built_in_stroke_fuzz_blur),
+                )
             strokes_painted += 1
 
     out_small = np.clip(canvas, 0.0, 255.0).astype(np.uint8)

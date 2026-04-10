@@ -63,6 +63,92 @@ PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
+APP_CSS = r"""
+/* Layout container */
+.app-wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  overflow-x: clip;
+}
+
+/* Make image columns behave nicely */
+.io-row {
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.panel {
+  border-radius: 16px;
+  min-width: 0 !important;
+  max-width: 100%;
+}
+
+/* Prevent slider rows from forcing horizontal page scroll on narrow viewports */
+.app-wrap .wrap,
+.app-wrap .form,
+.app-wrap .contain {
+  min-width: 0 !important;
+  max-width: 100%;
+}
+
+.app-wrap input[type="range"] {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Reduce visual clutter in sliders */
+.panel .gr-form > .wrap {
+  padding-top: 4px;
+}
+
+/* Sticky bar: Paintify + preset stay reachable while scrolling long control lists */
+.sticky-actions-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  padding: 10px 12px 12px;
+  margin: 0 -4px 12px;
+  border-radius: 12px;
+  background: var(--body-background-fill, #f8f9fb);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--border-color-primary, #e5e7eb);
+}
+
+.sticky-actions-row {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.sticky-actions-row .gr-button-primary {
+  flex-shrink: 0;
+}
+
+/* Responsive: stack panels on small screens */
+@media (max-width: 900px) {
+  .io-row { flex-direction: column !important; }
+}
+"""
+
+
+def _browse_output_folder() -> Any:
+    """Native folder dialog (local Gradio only). Falls back to no-op if unavailable."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askdirectory(title="Select output folder")
+        root.destroy()
+        if path:
+            return path
+    except Exception:
+        pass
+    return gr.update()
+
 
 def _frame_sort_key(filename: str) -> tuple:
     """
@@ -123,6 +209,8 @@ def _paint_single(
     canvas_texture_blur: float,
     seed: int,
     brush_texture: Optional[str],
+    built_in_stroke_fuzz: float,
+    built_in_stroke_fuzz_blur: float,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
     if image is None:
@@ -158,6 +246,8 @@ def _paint_single(
         underpaint=bool(underpaint),
         underpaint_mode=str(underpaint_mode),
         force_coverage=bool(force_coverage),
+        built_in_stroke_fuzz=float(built_in_stroke_fuzz),
+        built_in_stroke_fuzz_blur=float(built_in_stroke_fuzz_blur),
     )
     if canvas_texture is not None:
         canvas_texture_path = getattr(canvas_texture, "name", None) or str(canvas_texture)
@@ -262,6 +352,8 @@ def _export_batch_to_folder(
     canvas_texture_blur: float,
     seed: int,
     brush_texture: Optional[str],
+    built_in_stroke_fuzz: float,
+    built_in_stroke_fuzz_blur: float,
     dedupe_skipped: int = 0,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
@@ -345,6 +437,8 @@ def _export_batch_to_folder(
             underpaint=bool(underpaint),
             underpaint_mode=str(underpaint_mode),
             force_coverage=bool(force_coverage),
+            built_in_stroke_fuzz=float(built_in_stroke_fuzz),
+            built_in_stroke_fuzz_blur=float(built_in_stroke_fuzz_blur),
         )
         if canvas_texture_bgr is not None:
             out_bgr = apply_canvas_texture_overlay(
@@ -424,6 +518,8 @@ def _export_batch_from_files(
     canvas_texture_blur: float,
     seed: int,
     brush_texture: Optional[str],
+    built_in_stroke_fuzz: float,
+    built_in_stroke_fuzz_blur: float,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
     images, names, dedupe_skipped = _files_to_images_and_names(
@@ -455,6 +551,8 @@ def _export_batch_from_files(
         canvas_texture_blur=canvas_texture_blur,
         seed=seed,
         brush_texture=brush_texture,
+        built_in_stroke_fuzz=built_in_stroke_fuzz,
+        built_in_stroke_fuzz_blur=built_in_stroke_fuzz_blur,
         dedupe_skipped=dedupe_skipped,
         progress=progress,
     )
@@ -475,232 +573,273 @@ def _preset_to_controls(preset_name: str):
 
 def build_app() -> gr.Blocks:
     with gr.Blocks(title="Painterly Stroke Renderer") as demo:
-        gr.Markdown(
-            "### Painterly Stroke Renderer\n"
-            "Multi-layer stroke-based rendering (Hertzmann 1998). Use **Fast Preview** for quick feedback.\n"
-        )
-
-        # Sliders/controls at the top
-        with gr.Row():
-            preset = gr.Dropdown(list(PRESETS.keys()), value="Custom", label="Preset (Hertzmann 1998 variants)")
-            brush_tex = gr.File(
-                label="Optional brush texture PNG (slower). White=paint, black=transparent.",
-                file_types=[".png"],
-            )
-            canvas_tex = gr.File(
-                label="Optional canvas texture image (jpg/png, post-process)",
-                file_types=[".jpg", ".jpeg", ".png", ".webp"],
+        with gr.Column(elem_classes=["app-wrap"]):
+            gr.Markdown(
+                "## Painterly Stroke Renderer\n"
+                "Stroke-based rendering (Hertzmann 1998). For speed, use **Fast Preview** and lower `preview_max_side`.\n"
             )
 
-        with gr.Row():
-            brush_radii = gr.Textbox(
-                value="8,4,2",
-                label="brush_radii (larger radii=faster, smaller radii=slower)",
-            )
-            threshold = gr.Slider(
-                1.0,
-                120.0,
-                value=55.0,
-                step=1.0,
-                label="threshold (higher=faster, lower=slower)",
-            )
-            grid_factor = gr.Slider(
-                0.25,
-                3.0,
-                value=1.1,
-                step=0.05,
-                label="grid_factor (higher=faster, lower=slower)",
-            )
+            with gr.Tabs():
+                with gr.Tab("Single"):
+                    with gr.Column(elem_classes=["sticky-actions-wrap"]):
+                        gr.Markdown("### Single image")
+                        with gr.Row(elem_classes=["sticky-actions-row"]):
+                            preset = gr.Dropdown(
+                                list(PRESETS.keys()), value="Custom", label="Preset", scale=2, min_width=160
+                            )
+                            paint_btn = gr.Button("Paintify", variant="primary", scale=0, min_width=120)
+                            status = gr.Markdown("", elem_classes=["paintify-status"])
+                        download_single = gr.File(label="Download result")
 
-        with gr.Row():
-            max_stroke_length = gr.Slider(
-                2,
-                64,
-                value=14,
-                step=1,
-                label="max_stroke_length (lower=faster, higher=slower)",
-            )
-            min_stroke_length = gr.Slider(
-                1,
-                32,
-                value=4,
-                step=1,
-                label="min_stroke_length (slightly faster at lower values)",
-            )
-            curvature = gr.Slider(
-                0.0,
-                1.0,
-                value=1.0,
-                step=0.05,
-                label="curvature (mostly quality; minimal speed impact)",
-            )
-            opacity = gr.Slider(
-                0.05,
-                1.0,
-                value=0.9,
-                step=0.05,
-                label="opacity (quality; minimal speed impact)",
-            )
+                    with gr.Row(elem_classes=["io-row"]):
+                        with gr.Column(scale=4, min_width=280, elem_classes=["panel"]):
+                            gr.Markdown("### Controls")
 
-        with gr.Row():
-            fast_preview = gr.Checkbox(value=True, label="Fast Preview (much faster; largest radius only)")
-            preview_max_side = gr.Slider(
-                300,
-                2400,
-                value=900,
-                step=50,
-                label="preview_max_side (lower=faster, higher=slower)",
-            )
-            underpaint = gr.Checkbox(value=True, label="Underpaint (fills canvas immediately; recommended)")
-            underpaint_mode = gr.Radio(
-                ["average", "blur"],
-                value="average",
-                label="Underpaint mode (average=painterly strokes, blur=photo-like base)",
-            )
-            force_coverage = gr.Checkbox(value=True, label="Force coverage (fixes white gaps; can be slower)")
-            canvas_texture_opacity = gr.Slider(
-                0.0,
-                0.5,
-                value=0.12,
-                step=0.01,
-                label="canvas_texture_opacity (0=subtle off, higher=stronger texture)",
-            )
-            canvas_texture_blur = gr.Slider(
-                0.0,
-                4.0,
-                value=0.6,
-                step=0.1,
-                label="canvas_texture_blur (higher=softer texture)",
-            )
-            time_budget_s = gr.Slider(
-                5,
-                60,
-                value=30,
-                step=1,
-                label="time_budget_s (hard cap; lower=faster, higher=slower)",
-            )
-            max_strokes_per_layer = gr.Slider(
-                100,
-                20000,
-                value=4000,
-                step=100,
-                label="max_strokes_per_layer (hard cap; lower=faster, higher=slower)",
-            )
-            seed = gr.Number(value=1, precision=0, label="seed (deterministic; no speed impact)")
+                            with gr.Accordion("Brush", open=True):
+                                brush_tex = gr.File(
+                                    label="Optional brush texture PNG (slower). White=paint, black=transparent.",
+                                    file_types=[".png"],
+                                )
+                                brush_radii = gr.Textbox(
+                                    value="8,4,2",
+                                    label="brush_radii (larger radii=faster, smaller radii=slower)",
+                                )
+                                threshold = gr.Slider(
+                                    1.0,
+                                    120.0,
+                                    value=55.0,
+                                    step=1.0,
+                                    label="threshold (higher=faster, lower=slower)",
+                                )
+                                grid_factor = gr.Slider(
+                                    0.25,
+                                    3.0,
+                                    value=1.1,
+                                    step=0.05,
+                                    label="grid_factor (higher=faster, lower=slower)",
+                                )
+                                max_stroke_length = gr.Slider(
+                                    2,
+                                    64,
+                                    value=14,
+                                    step=1,
+                                    label="max_stroke_length (lower=faster, higher=slower)",
+                                )
+                                min_stroke_length = gr.Slider(
+                                    1,
+                                    32,
+                                    value=4,
+                                    step=1,
+                                    label="min_stroke_length (slightly faster at lower values)",
+                                )
+                                curvature = gr.Slider(
+                                    0.0,
+                                    1.0,
+                                    value=1.0,
+                                    step=0.05,
+                                    label="curvature (mostly quality; minimal speed impact)",
+                                )
+                                opacity = gr.Slider(
+                                    0.05,
+                                    1.0,
+                                    value=0.9,
+                                    step=0.05,
+                                    label="opacity (quality; minimal speed impact)",
+                                )
 
-        # Input / Output only
-        with gr.Row():
-            in_img = gr.Image(type="pil", label="Input")
-            out_img = gr.Image(type="pil", label="Output")
+                            with gr.Accordion("Built-in fuzz (no PNG)", open=False):
+                                gr.Markdown(
+                                    "Adds procedural grain to **solid** strokes so paint isn't uniformly opaque. "
+                                    "Set to 0 to disable. Not used when a brush texture PNG is loaded."
+                                )
+                                built_in_stroke_fuzz = gr.Slider(
+                                    0.0,
+                                    0.5,
+                                    value=0.12,
+                                    step=0.02,
+                                    label="built_in_stroke_fuzz",
+                                )
+                                built_in_stroke_fuzz_blur = gr.Slider(
+                                    0.0,
+                                    4.0,
+                                    value=1.0,
+                                    step=0.1,
+                                    label="built_in_stroke_fuzz_blur",
+                                )
 
-        with gr.Row():
-            paint_btn = gr.Button("Paintify", variant="primary")
-            download_single = gr.File(label="Download result")
+                            with gr.Accordion("Performance", open=True):
+                                fast_preview = gr.Checkbox(value=True, label="Fast Preview (largest radius only)")
+                                preview_max_side = gr.Slider(
+                                    300,
+                                    2400,
+                                    value=900,
+                                    step=50,
+                                    label="preview_max_side (lower=faster, higher=slower)",
+                                )
+                                time_budget_s = gr.Slider(
+                                    5,
+                                    60,
+                                    value=30,
+                                    step=1,
+                                    label="time_budget_s (hard cap)",
+                                )
+                                max_strokes_per_layer = gr.Slider(
+                                    100,
+                                    20000,
+                                    value=4000,
+                                    step=100,
+                                    label="max_strokes_per_layer (hard cap)",
+                                )
 
-        status = gr.Markdown("")
+                            with gr.Accordion("Coverage + Canvas", open=False):
+                                underpaint = gr.Checkbox(value=True, label="Underpaint (recommended)")
+                                underpaint_mode = gr.Radio(
+                                    ["average", "blur"],
+                                    value="average",
+                                    label="Underpaint mode",
+                                )
+                                force_coverage = gr.Checkbox(value=True, label="Force coverage (fixes white gaps)")
+                                canvas_tex = gr.File(
+                                    label="Optional canvas texture image (jpg/png/webp)",
+                                    file_types=[".jpg", ".jpeg", ".png", ".webp"],
+                                )
+                                canvas_texture_opacity = gr.Slider(
+                                    0.0,
+                                    0.5,
+                                    value=0.12,
+                                    step=0.01,
+                                    label="canvas_texture_opacity",
+                                )
+                                canvas_texture_blur = gr.Slider(
+                                    0.0,
+                                    4.0,
+                                    value=0.6,
+                                    step=0.1,
+                                    label="canvas_texture_blur",
+                                )
 
-        preset.change(
-            fn=_preset_to_controls,
-            inputs=[preset],
-            outputs=[
-                brush_radii,
-                threshold,
-                max_stroke_length,
-                min_stroke_length,
-                curvature,
-                opacity,
-                grid_factor,
-            ],
-        )
+                            seed = gr.Number(value=1, precision=0, label="seed")
 
-        paint_btn.click(
-            fn=_paint_single,
-            inputs=[
-                in_img,
-                brush_radii,
-                threshold,
-                max_stroke_length,
-                min_stroke_length,
-                curvature,
-                opacity,
-                grid_factor,
-                fast_preview,
-                preview_max_side,
-                time_budget_s,
-                max_strokes_per_layer,
-                underpaint,
-                underpaint_mode,
-                force_coverage,
-                canvas_tex,
-                canvas_texture_opacity,
-                canvas_texture_blur,
-                seed,
-                brush_tex,
-            ],
-            outputs=[in_img, out_img, status, download_single],
-        )
+                        with gr.Column(scale=7, min_width=280, elem_classes=["panel"]):
+                            gr.Markdown("### Input / Output")
+                            with gr.Row():
+                                in_img = gr.Image(type="pil", label="Input", height=420)
+                                out_img = gr.Image(type="pil", label="Output", height=420)
 
-        # Batch export to disk (up to 500 images)
-        gr.Markdown("---")
-        gr.Markdown("## Batch Export to Folder (up to 500 images)")
+                    preset.change(
+                        fn=_preset_to_controls,
+                        inputs=[preset],
+                        outputs=[
+                            brush_radii,
+                            threshold,
+                            max_stroke_length,
+                            min_stroke_length,
+                            curvature,
+                            opacity,
+                            grid_factor,
+                        ],
+                    )
 
-        with gr.Row():
-            batch_in = gr.Files(label="Input images (limit: 500)", file_types=["image"])
-            output_dir = gr.Textbox(label="Output folder path", value=str(Path.cwd() / "painterly_out"))
+                    paint_btn.click(
+                        fn=_paint_single,
+                        inputs=[
+                            in_img,
+                            brush_radii,
+                            threshold,
+                            max_stroke_length,
+                            min_stroke_length,
+                            curvature,
+                            opacity,
+                            grid_factor,
+                            fast_preview,
+                            preview_max_side,
+                            time_budget_s,
+                            max_strokes_per_layer,
+                            underpaint,
+                            underpaint_mode,
+                            force_coverage,
+                            canvas_tex,
+                            canvas_texture_opacity,
+                            canvas_texture_blur,
+                            seed,
+                            brush_tex,
+                            built_in_stroke_fuzz,
+                            built_in_stroke_fuzz_blur,
+                        ],
+                        outputs=[in_img, out_img, status, download_single],
+                    )
 
-        with gr.Row():
-            output_format = gr.Radio(["png", "jpg"], value="jpg", label="Output format")
-            overwrite = gr.Checkbox(value=True, label="Overwrite existing files")
-            batch_numbered_sequence = gr.Checkbox(
-                value=True,
-                label="Sequence filenames (frame_000001_painterly.* … avoids duplicate stems)",
-            )
-            batch_sort_by_frame = gr.Checkbox(
-                value=True,
-                label="Sort by number in filename (fixes Blender jumps — upload order is often wrong)",
-            )
+                with gr.Tab("Batch Export"):
+                    gr.Markdown(
+                        "### Export a sequence to a folder\n"
+                        "Tip: keep **Sort by number in filename** ON for Blender/VSE sequences."
+                    )
+                    with gr.Row():
+                        batch_in = gr.Files(label="Input images (limit: 500)", file_types=["image"])
+                    with gr.Row():
+                        output_dir = gr.Textbox(
+                            label="Output folder path",
+                            value=str(Path.cwd() / "painterly_out"),
+                            scale=4,
+                        )
+                        browse_output_btn = gr.Button("Browse folder…", scale=0, min_width=140)
 
-        with gr.Row():
-            batch_btn = gr.Button("Export Batch", variant="primary")
-            batch_status = gr.Markdown("")
+                    browse_output_btn.click(fn=_browse_output_folder, inputs=[], outputs=[output_dir])
 
-        batch_btn.click(
-            fn=_export_batch_from_files,
-            inputs=[
-                batch_in,
-                output_dir,
-                output_format,
-                overwrite,
-                batch_numbered_sequence,
-                batch_sort_by_frame,
-                brush_radii,
-                threshold,
-                max_stroke_length,
-                min_stroke_length,
-                curvature,
-                opacity,
-                grid_factor,
-                fast_preview,
-                preview_max_side,
-                time_budget_s,
-                max_strokes_per_layer,
-                underpaint,
-                underpaint_mode,
-                force_coverage,
-                canvas_tex,
-                canvas_texture_opacity,
-                canvas_texture_blur,
-                seed,
-                brush_tex,
-            ],
-            outputs=[batch_status],
-        )
+                    with gr.Row():
+                        output_format = gr.Radio(["png", "jpg"], value="jpg", label="Output format")
+                        overwrite = gr.Checkbox(value=True, label="Overwrite existing files")
+                        batch_numbered_sequence = gr.Checkbox(
+                            value=True,
+                            label="Sequence filenames (frame_000001_painterly.* … avoids duplicate stems)",
+                        )
+                        batch_sort_by_frame = gr.Checkbox(
+                            value=True,
+                            label="Sort by number in filename (fixes Blender jumps)",
+                        )
 
-        demo.queue()
+                    batch_btn = gr.Button("Export Batch", variant="primary")
+                    batch_status = gr.Markdown("")
+
+                    batch_btn.click(
+                        fn=_export_batch_from_files,
+                        inputs=[
+                            batch_in,
+                            output_dir,
+                            output_format,
+                            overwrite,
+                            batch_numbered_sequence,
+                            batch_sort_by_frame,
+                            brush_radii,
+                            threshold,
+                            max_stroke_length,
+                            min_stroke_length,
+                            curvature,
+                            opacity,
+                            grid_factor,
+                            fast_preview,
+                            preview_max_side,
+                            time_budget_s,
+                            max_strokes_per_layer,
+                            underpaint,
+                            underpaint_mode,
+                            force_coverage,
+                            canvas_tex,
+                            canvas_texture_opacity,
+                            canvas_texture_blur,
+                            seed,
+                            brush_tex,
+                            built_in_stroke_fuzz,
+                            built_in_stroke_fuzz_blur,
+                        ],
+                        outputs=[batch_status],
+                    )
+
+            demo.queue()
     return demo
 
 
 if __name__ == "__main__":
     app = build_app()
-    app.launch()
+    app.launch(inbrowser=True, theme=gr.themes.Soft(), css=APP_CSS)
 
