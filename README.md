@@ -4,7 +4,7 @@ Local Python web app that turns photos into painterly, stroke-based renderings u
 
 ## Setup
 
-From `C:\Cursor Projects`:
+From the project's parent directory:
 
 ```powershell
 python -m venv .venv
@@ -24,7 +24,6 @@ Open the local Gradio URL it prints.
 
 - If results look like a blur, raise **threshold** a bit and/or increase **grid_factor** (fewer strokes), and make sure **Fast Preview** is off for final renders.
 - Large images can take time. The preview tab downsamples any side larger than `preview_max_side` and upsamples the result back.
-- For more “oil paint” texture, upload a brush PNG in the UI. See `painterly_app/brushes/README.txt`.
 
 ### Batch export + Blender / image sequences
 
