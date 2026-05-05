@@ -64,24 +64,32 @@ PRESETS: dict[str, dict[str, Any]] = {
 }
 
 APP_CSS = r"""
+/* ===== Flat color theme — no gradients, no shadows ===== */
+* {
+  background-image: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
 /* Layout container */
 .app-wrap {
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   overflow-x: clip;
 }
 
 /* Make image columns behave nicely */
 .io-row {
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
   align-items: flex-start;
 }
 
 .panel {
-  border-radius: 16px;
+  border-radius: 4px;
   min-width: 0 !important;
   max-width: 100%;
+  border: 1px solid #d1d5db;
 }
 
 /* Prevent slider rows from forcing horizontal page scroll on narrow viewports */
@@ -97,22 +105,16 @@ APP_CSS = r"""
   box-sizing: border-box;
 }
 
-/* Reduce visual clutter in sliders */
-.panel .gr-form > .wrap {
-  padding-top: 4px;
-}
-
-/* Sticky bar: Paintify + preset stay reachable while scrolling long control lists */
+/* Sticky bar */
 .sticky-actions-wrap {
   position: sticky;
   top: 0;
   z-index: 50;
-  padding: 10px 12px 12px;
-  margin: 0 -4px 12px;
-  border-radius: 12px;
-  background: var(--body-background-fill, #f8f9fb);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-  border: 1px solid var(--border-color-primary, #e5e7eb);
+  padding: 8px 12px 10px;
+  margin: 0 -4px 10px;
+  border-radius: 4px;
+  background: #f1f5f9 !important;
+  border: 1px solid #cbd5e1;
 }
 
 .sticky-actions-row {
@@ -121,8 +123,9 @@ APP_CSS = r"""
   gap: 8px 12px;
 }
 
-.sticky-actions-row .gr-button-primary {
-  flex-shrink: 0;
+/* Download file widget — compact */
+.download-wrap {
+  margin-top: 6px;
 }
 
 /* Responsive: stack panels on small screens */
@@ -573,6 +576,9 @@ def _preset_to_controls(preset_name: str):
 
 def build_app() -> gr.Blocks:
     with gr.Blocks(title="Painterly Stroke Renderer") as demo:
+        # Hidden state — brush texture removed from UI but kept in backend signature
+        brush_tex = gr.State(None)
+
         with gr.Column(elem_classes=["app-wrap"]):
             gr.Markdown(
                 "## Painterly Stroke Renderer\n"
@@ -582,149 +588,99 @@ def build_app() -> gr.Blocks:
             with gr.Tabs():
                 with gr.Tab("Single"):
                     with gr.Column(elem_classes=["sticky-actions-wrap"]):
-                        gr.Markdown("### Single image")
                         with gr.Row(elem_classes=["sticky-actions-row"]):
                             preset = gr.Dropdown(
                                 list(PRESETS.keys()), value="Custom", label="Preset", scale=2, min_width=160
                             )
                             paint_btn = gr.Button("Paintify", variant="primary", scale=0, min_width=120)
                             status = gr.Markdown("", elem_classes=["paintify-status"])
-                        download_single = gr.File(label="Download result")
 
                     with gr.Row(elem_classes=["io-row"]):
-                        with gr.Column(scale=4, min_width=280, elem_classes=["panel"]):
+                        with gr.Column(scale=8, min_width=400, elem_classes=["panel"]):
+                            with gr.Row():
+                                in_img = gr.Image(type="pil", label="Input", height=520)
+                                out_img = gr.Image(type="pil", label="Output", height=520)
+                            with gr.Row(elem_classes=["download-wrap"]):
+                                download_single = gr.File(label="Download result", scale=1)
+
+                        with gr.Column(scale=3, min_width=220, elem_classes=["panel"]):
                             gr.Markdown("### Controls")
 
                             with gr.Accordion("Brush", open=True):
-                                brush_tex = gr.File(
-                                    label="Optional brush texture PNG (slower). White=paint, black=transparent.",
-                                    file_types=[".png"],
-                                )
                                 brush_radii = gr.Textbox(
                                     value="8,4,2",
-                                    label="brush_radii (larger radii=faster, smaller radii=slower)",
+                                    label="brush_radii (larger=faster, smaller=slower)",
                                 )
                                 threshold = gr.Slider(
-                                    1.0,
-                                    120.0,
-                                    value=55.0,
-                                    step=1.0,
-                                    label="threshold (higher=faster, lower=slower)",
+                                    1.0, 120.0, value=55.0, step=1.0,
+                                    label="threshold (higher=faster)",
                                 )
                                 grid_factor = gr.Slider(
-                                    0.25,
-                                    3.0,
-                                    value=1.1,
-                                    step=0.05,
-                                    label="grid_factor (higher=faster, lower=slower)",
+                                    0.25, 3.0, value=1.1, step=0.05,
+                                    label="grid_factor (higher=faster)",
                                 )
                                 max_stroke_length = gr.Slider(
-                                    2,
-                                    64,
-                                    value=14,
-                                    step=1,
-                                    label="max_stroke_length (lower=faster, higher=slower)",
+                                    2, 64, value=14, step=1,
+                                    label="max_stroke_length (lower=faster)",
                                 )
                                 min_stroke_length = gr.Slider(
-                                    1,
-                                    32,
-                                    value=4,
-                                    step=1,
-                                    label="min_stroke_length (slightly faster at lower values)",
+                                    1, 32, value=4, step=1,
+                                    label="min_stroke_length",
                                 )
                                 curvature = gr.Slider(
-                                    0.0,
-                                    1.0,
-                                    value=1.0,
-                                    step=0.05,
-                                    label="curvature (mostly quality; minimal speed impact)",
+                                    0.0, 1.0, value=1.0, step=0.05,
+                                    label="curvature",
                                 )
                                 opacity = gr.Slider(
-                                    0.05,
-                                    1.0,
-                                    value=0.9,
-                                    step=0.05,
-                                    label="opacity (quality; minimal speed impact)",
+                                    0.05, 1.0, value=0.9, step=0.05,
+                                    label="opacity",
                                 )
 
-                            with gr.Accordion("Built-in fuzz (no PNG)", open=False):
-                                gr.Markdown(
-                                    "Adds procedural grain to **solid** strokes so paint isn't uniformly opaque. "
-                                    "Set to 0 to disable. Not used when a brush texture PNG is loaded."
-                                )
+                            with gr.Accordion("Built-in fuzz", open=False):
                                 built_in_stroke_fuzz = gr.Slider(
-                                    0.0,
-                                    0.5,
-                                    value=0.12,
-                                    step=0.02,
-                                    label="built_in_stroke_fuzz",
+                                    0.0, 0.5, value=0.12, step=0.02,
+                                    label="stroke_fuzz",
                                 )
                                 built_in_stroke_fuzz_blur = gr.Slider(
-                                    0.0,
-                                    4.0,
-                                    value=1.0,
-                                    step=0.1,
-                                    label="built_in_stroke_fuzz_blur",
+                                    0.0, 4.0, value=1.0, step=0.1,
+                                    label="stroke_fuzz_blur",
                                 )
 
                             with gr.Accordion("Performance", open=True):
                                 fast_preview = gr.Checkbox(value=True, label="Fast Preview (largest radius only)")
                                 preview_max_side = gr.Slider(
-                                    300,
-                                    2400,
-                                    value=900,
-                                    step=50,
-                                    label="preview_max_side (lower=faster, higher=slower)",
+                                    300, 2400, value=900, step=50,
+                                    label="preview_max_side (lower=faster)",
                                 )
                                 time_budget_s = gr.Slider(
-                                    5,
-                                    60,
-                                    value=30,
-                                    step=1,
+                                    5, 60, value=30, step=1,
                                     label="time_budget_s (hard cap)",
                                 )
                                 max_strokes_per_layer = gr.Slider(
-                                    100,
-                                    20000,
-                                    value=4000,
-                                    step=100,
+                                    100, 20000, value=4000, step=100,
                                     label="max_strokes_per_layer (hard cap)",
                                 )
 
                             with gr.Accordion("Coverage + Canvas", open=False):
                                 underpaint = gr.Checkbox(value=True, label="Underpaint (recommended)")
                                 underpaint_mode = gr.Radio(
-                                    ["average", "blur"],
-                                    value="average",
-                                    label="Underpaint mode",
+                                    ["average", "blur"], value="average", label="Underpaint mode",
                                 )
                                 force_coverage = gr.Checkbox(value=True, label="Force coverage (fixes white gaps)")
                                 canvas_tex = gr.File(
-                                    label="Optional canvas texture image (jpg/png/webp)",
+                                    label="Canvas texture image (jpg/png/webp)",
                                     file_types=[".jpg", ".jpeg", ".png", ".webp"],
                                 )
                                 canvas_texture_opacity = gr.Slider(
-                                    0.0,
-                                    0.5,
-                                    value=0.12,
-                                    step=0.01,
+                                    0.0, 0.5, value=0.12, step=0.01,
                                     label="canvas_texture_opacity",
                                 )
                                 canvas_texture_blur = gr.Slider(
-                                    0.0,
-                                    4.0,
-                                    value=0.6,
-                                    step=0.1,
+                                    0.0, 4.0, value=0.6, step=0.1,
                                     label="canvas_texture_blur",
                                 )
 
                             seed = gr.Number(value=1, precision=0, label="seed")
-
-                        with gr.Column(scale=7, min_width=280, elem_classes=["panel"]):
-                            gr.Markdown("### Input / Output")
-                            with gr.Row():
-                                in_img = gr.Image(type="pil", label="Input", height=420)
-                                out_img = gr.Image(type="pil", label="Output", height=420)
 
                     preset.change(
                         fn=_preset_to_controls,
@@ -841,5 +797,5 @@ def build_app() -> gr.Blocks:
 
 if __name__ == "__main__":
     app = build_app()
-    app.launch(inbrowser=True, theme=gr.themes.Soft(), css=APP_CSS)
+    app.launch(inbrowser=True, theme=gr.themes.Base(), css=APP_CSS)
 
